@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Toxic Comment Classifier</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <button id="history-toggle" class="history-toggle" aria-label="Toggle scan history">☰</button>
+  <div class="app-grid">
+    <aside class="history-panel" id="history-panel">
+      <div class="history-title">[ SCAN HISTORY ]</div>
+      <div class="history-list" id="history-list"></div>
+      <button class="history-clear" id="history-clear">CLEAR HISTORY</button>
+    </aside>
+
+    <div class="shell">
+      <header>
+        <div class="ascii">[ TOXIC COMMENT CLASSIFIER ]</div>
+        <div class="subtitle">Brutalist toxicity scanner. Paste text and initiate analysis.</div>
+      </header>
+
+      <main>
+        <section class="input-panel">
+          <textarea id="comment" maxlength="2000" placeholder="paste comment here..."></textarea>
+          <div class="counter">
+            <span>Character count</span>
+            <span id="count">0 / 2000</span>
+          </div>
+          <button id="analyze" class="button">Analyze</button>
+        </section>
+
+        <section class="results" id="results">
+          <div class="error" id="error">[ API OFFLINE — CHECK SERVER ]</div>
+          <div class="verdict">
+            <span id="verdict-text">Verdict</span>
+            <span id="verdict-badge" class="badge clean">CLEAN</span>
+          </div>
+          <div id="bars"></div>
+        </section>
+      </main>
+
+      <div class="footer">
+        <span id="stat-model">MODEL: Logistic Regression + TF-IDF</span>
+        <span id="stat-labels">LABELS: 6</span>
+        <span id="stat-dataset">DATASET: Jigsaw 2018</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const LABELS = [
+      "toxic",
+      "severe_toxic",
+      "obscene",
+      "threat",
+      "insult",
+      "identity_hate",
+    ];
+
+    const textarea = document.getElementById("comment");
+    const countEl = document.getElementById("count");
+    const analyzeBtn = document.getElementById("analyze");
+    const resultsEl = document.getElementById("results");
+    const barsEl = document.getElementById("bars");
+    const errorEl = document.getElementById("error");
+    const verdictText = document.getElementById("verdict-text");
+    const verdictBadge = document.getElementById("verdict-badge");
+    const historyToggle = document.getElementById("history-toggle");
+    const historyList = document.getElementById("history-list");
+    const historyClear = document.getElementById("history-clear");
+    const statModel = document.getElementById("stat-model");
+    const statLabels = document.getElementById("stat-labels");
+    const statDataset = document.getElementById("stat-dataset");
+
+    const HISTORY_KEY = "tcc_history";
+
+    function updateCount() {
+      const length = textarea.value.length;
+      countEl.textContent = `${length} / 2000`;
+      countEl.classList.toggle("alert", length >= 1800);
+    }
+
+    function colorFor(value) {
+      if (value <= 0.33) return "#39ff14";
+      if (value <= 0.66) return "#f2c94c";
+      return "#ff3b30";
+    }
+
+    function truncate(text) {
+      const cleaned = String(text || "").replace(/\s+/g, " ").trim();
+      if (!cleaned) return "(empty)";
+      if (cleaned.length <= 40) return cleaned;
+      return `${cleaned.slice(0, 40)}...`;
+    }
+
+    function loadHistory() {
+      try {
+        const stored = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+        return Array.isArray(stored) ? stored : [];
+      } catch (err) {
+        return [];
+      }
+    }
+
+    function saveHistory(items) {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(items));
+    }
+
+    function renderHistory(items = loadHistory()) {
+      historyList.innerHTML = "";
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "history-empty";
+        empty.textContent = "No scans yet.";
+        historyList.appendChild(empty);
+        return;
+      }
+
+      items.forEach((item) => {
+        const entry = document.createElement("button");
+        entry.type = "button";
+        entry.className = "history-entry";
+        const verdict = item.is_toxic ? "TOXIC" : "CLEAN";
+        const label = String(item.top_label || "unknown").replace("_", " ");
+        entry.innerHTML = `
+          <div class="history-snippet">${truncate(item.text)}</div>
+          <div class="history-meta">
+            <span class="history-label">${label}</span>
+            <span class="history-badge ${item.is_toxic ? "toxic" : "clean"}">${verdict}</span>
+          </div>
+        `;
+        entry.addEventListener("click", () => {
+          textarea.value = item.text || "";
+          updateCount();
+          showResults(item);
+          if (window.matchMedia("(max-width: 900px)").matches) {
+            document.body.classList.add("history-collapsed");
+          }
+        });
+        historyList.appendChild(entry);
+      });
+    }
+
+    function pushHistory(entry) {
+      const items = loadHistory();
+      items.unshift(entry);
+      const trimmed = items.slice(0, 10);
+      saveHistory(trimmed);
+      renderHistory(trimmed);
+    }
+
+    function setLoading(isLoading) {
+      analyzeBtn.disabled = isLoading;
+      if (isLoading) {
+        analyzeBtn.innerHTML = '<span class="spinner">SCANNING...</span>';
+      } else {
+        analyzeBtn.textContent = "ANALYZE";
+      }
+    }
+
+    function buildBars(predictions) {
+      barsEl.innerHTML = "";
+      LABELS.forEach((label) => {
+        const row = document.createElement("div");
+        row.className = "bar-row";
+
+        const labelEl = document.createElement("div");
+        labelEl.className = "label";
+        labelEl.textContent = label.replace("_", " ");
+
+        const bar = document.createElement("div");
+        bar.className = "bar";
+
+        const fill = document.createElement("div");
+        fill.className = "bar-fill";
+        bar.appendChild(fill);
+
+        const percent = document.createElement("div");
+        percent.className = "percent";
+        percent.textContent = "0%";
+
+        row.append(labelEl, bar, percent);
+        barsEl.appendChild(row);
+
+        const target = Math.max(0, Math.min(1, predictions[label] || 0));
+        const delay = LABELS.indexOf(label) * 80;
+        setTimeout(() => animateBar(fill, percent, target), delay);
+      });
+    }
+
+    function animateBar(fill, percent, target) {
+      const duration = 600;
+      const start = performance.now();
+
+      function step(now) {
+        const progress = Math.min((now - start) / duration, 1);
+        const value = progress * target;
+        fill.style.width = `${value * 100}%`;
+        fill.style.background = colorFor(value);
+        fill.style.boxShadow = `0 0 10px ${colorFor(value)}55`;
+        percent.textContent = `${Math.round(value * 100)}%`;
+        if (progress < 1) {
+          requestAnimationFrame(step);
+        }
+      }
+
+      requestAnimationFrame(step);
+    }
+
+    function showResults(data) {
+      errorEl.classList.remove("visible");
+      const predictions = data.predictions || {};
+      const isToxic = Boolean(data.is_toxic);
+      const topLabel = String(data.top_label || "unknown").replace("_", " ");
+
+      verdictText.textContent = `Dominant: ${topLabel}`;
+      verdictBadge.textContent = isToxic ? "TOXIC" : "CLEAN";
+      verdictBadge.classList.toggle("toxic", isToxic);
+      verdictBadge.classList.toggle("clean", !isToxic);
+
+      buildBars(predictions);
+      resultsEl.classList.add("visible");
+    }
+
+    async function loadStats() {
+      try {
+        const response = await fetch("/api/stats");
+        if (!response.ok) {
+          return;
+        }
+        const data = await response.json();
+        if (data.model_type && data.vectorizer) {
+          statModel.textContent = `MODEL: ${data.model_type} | ${data.vectorizer}`;
+        }
+        if (Array.isArray(data.labels)) {
+          statLabels.textContent = `LABELS: ${data.labels.length}`;
+        }
+        if (data.dataset) {
+          statDataset.textContent = `DATASET: ${data.dataset}`;
+        }
+      } catch (err) {
+        return;
+      }
+    }
+
+    async function analyze() {
+      const text = textarea.value.trim();
+      if (!text) {
+        return;
+      }
+
+      errorEl.classList.remove("visible");
+      resultsEl.classList.remove("visible");
+      setLoading(true);
+
+      try {
+        const response = await fetch("/api/classify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+
+        if (!response.ok) {
+          throw new Error("API error");
+        }
+
+        const data = await response.json();
+        const entry = {
+          text,
+          predictions: data.predictions || {},
+          is_toxic: Boolean(data.is_toxic),
+          top_label: data.top_label || "unknown",
+        };
+        showResults(entry);
+        pushHistory(entry);
+      } catch (err) {
+        errorEl.classList.add("visible");
+        resultsEl.classList.add("visible");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    analyzeBtn.addEventListener("click", analyze);
+    textarea.addEventListener("input", updateCount);
+    textarea.addEventListener("keydown", (event) => {
+      if (event.ctrlKey && event.key === "Enter") {
+        analyze();
+      }
+    });
+
+    historyToggle.addEventListener("click", () => {
+      document.body.classList.toggle("history-collapsed");
+    });
+
+    historyClear.addEventListener("click", () => {
+      localStorage.removeItem(HISTORY_KEY);
+      renderHistory([]);
+    });
+
+    if (window.matchMedia("(max-width: 900px)").matches) {
+      document.body.classList.add("history-collapsed");
+    }
+    updateCount();
+    renderHistory();
+    loadStats();
+  </script>
+</body>
+</html>
