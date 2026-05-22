@@ -1,15 +1,9 @@
 import argparse
-import re
-import string
 from pathlib import Path
 from pprint import pprint
 
 import joblib
-import nltk
-import numpy as np
 import pandas as pd
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
 from sklearn.metrics import classification_report, precision_recall_fscore_support
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
@@ -17,6 +11,11 @@ from sklearn.multiclass import OneVsRestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
+
+try:
+    from model.text_processing import build_preprocessor, download_nltk
+except ImportError:
+    from text_processing import build_preprocessor, download_nltk
 
 LABELS = [
     "toxic",
@@ -26,31 +25,6 @@ LABELS = [
     "insult",
     "identity_hate",
 ]
-
-
-def download_nltk():
-    nltk.download("stopwords", quiet=True)
-    nltk.download("wordnet", quiet=True)
-    nltk.download("omw-1.4", quiet=True)
-
-
-def build_preprocessor():
-    stop_words = set(stopwords.words("english"))
-    lemmatizer = WordNetLemmatizer()
-    url_re = re.compile(r"http[s]?://\S+|www\.\S+")
-    punct_re = re.compile(rf"[{re.escape(string.punctuation)}]")
-
-    def preprocess(text):
-        if not isinstance(text, str):
-            text = ""
-        text = text.lower()
-        text = url_re.sub(" ", text)
-        text = punct_re.sub(" ", text)
-        tokens = [tok for tok in text.split() if tok and tok not in stop_words]
-        tokens = [lemmatizer.lemmatize(tok) for tok in tokens]
-        return " ".join(tokens)
-
-    return preprocess
 
 
 def load_and_sample(data_path):

@@ -75,7 +75,7 @@ try {
   }
   Start-Process "http://localhost:5000"
   Write-Host "App running at http://localhost:5000"
-  Write-Host ([char]0x2705 + " SETUP COMPLETE - Open http://localhost:5000 in your browser")
+  Write-Host "SETUP COMPLETE - Open http://localhost:5000 in your browser"
 } catch {
   Fail "Setup failed: $($_.Exception.Message)"
 }

@@ -1,10 +1,11 @@
-import json
 from pathlib import Path
 
 import numpy as np
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import joblib
+
+from model.text_processing import build_preprocessor
 
 LABELS = [
     "toxic",
@@ -18,34 +19,31 @@ LABELS = [
 MODEL_PATH = Path(__file__).parent / "model" / "classifier.pkl"
 
 
-class MockPredictor:
-    def predict_proba(self, texts):
-        probs = []
-        for text in texts:
-            seed = abs(hash(text)) % (2**32)
-            rng = np.random.default_rng(seed)
-            probs.append(rng.random(len(LABELS)))
-        return np.vstack(probs)
-
-
 def load_model():
-    if MODEL_PATH.exists():
-        try:
-            return joblib.load(MODEL_PATH), True
-        except Exception:
-            pass
-    return MockPredictor(), False
+    if not MODEL_PATH.exists():
+        return None, f"Model file not found at {MODEL_PATH}"
+    try:
+        return joblib.load(MODEL_PATH), None
+    except Exception as exc:
+        return None, f"Failed to load model: {exc}"
 
 
 app = Flask(__name__)
 CORS(app)
 
-model, model_loaded = load_model()
+model, model_error = load_model()
+preprocess = build_preprocessor()
 
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "model_loaded": bool(model_loaded)})
+    return jsonify(
+        {
+            "status": "ok" if model is not None else "degraded",
+            "model_loaded": model is not None,
+            "model_error": model_error,
+        }
+    )
 
 
 @app.route("/api/stats", methods=["GET"])
@@ -63,13 +61,17 @@ def stats():
 
 @app.route("/api/classify", methods=["POST"])
 def classify():
+    if model is None:
+        return jsonify({"error": "Model is unavailable.", "detail": model_error}), 503
+
     payload = request.get_json(silent=True) or {}
     text = payload.get("text", "")
 
     if not isinstance(text, str) or not text.strip():
         return jsonify({"error": "Missing or empty 'text' field."}), 400
 
-    proba = np.asarray(model.predict_proba([text]))
+    clean_text = preprocess(text)
+    proba = np.asarray(model.predict_proba([clean_text]))
     if proba.ndim != 2 or proba.shape[1] != len(LABELS):
         return jsonify({"error": "Model returned unexpected shape."}), 500
 

@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <button id="history-toggle" class="history-toggle" aria-label="Toggle scan history">☰</button>
+  <button id="history-toggle" class="history-toggle" aria-label="Toggle scan history">&#9776;</button>
   <div class="app-grid">
     <aside class="history-panel" id="history-panel">
       <div class="history-title">[ SCAN HISTORY ]</div>
@@ -35,7 +35,7 @@
         </section>
 
         <section class="results" id="results">
-          <div class="error" id="error">[ API OFFLINE — CHECK SERVER ]</div>
+          <div class="error" id="error">[ API OFFLINE -- CHECK SERVER ]</div>
           <div class="verdict">
             <span id="verdict-text">Verdict</span>
             <span id="verdict-badge" class="badge clean">CLEAN</span>
@@ -48,6 +48,7 @@
         <span id="stat-model">MODEL: Logistic Regression + TF-IDF</span>
         <span id="stat-labels">LABELS: 6</span>
         <span id="stat-dataset">DATASET: Jigsaw 2018</span>
+        <span id="stat-status" class="status-pill pending">MODEL: CHECKING</span>
       </div>
     </div>
   </div>
@@ -76,6 +77,7 @@
     const statModel = document.getElementById("stat-model");
     const statLabels = document.getElementById("stat-labels");
     const statDataset = document.getElementById("stat-dataset");
+    const statStatus = document.getElementById("stat-status");
 
     const HISTORY_KEY = "tcc_history";
 
@@ -127,13 +129,23 @@
         entry.className = "history-entry";
         const verdict = item.is_toxic ? "TOXIC" : "CLEAN";
         const label = String(item.top_label || "unknown").replace("_", " ");
-        entry.innerHTML = `
-          <div class="history-snippet">${truncate(item.text)}</div>
-          <div class="history-meta">
-            <span class="history-label">${label}</span>
-            <span class="history-badge ${item.is_toxic ? "toxic" : "clean"}">${verdict}</span>
-          </div>
-        `;
+        const snippet = document.createElement("div");
+        snippet.className = "history-snippet";
+        snippet.textContent = truncate(item.text);
+
+        const meta = document.createElement("div");
+        meta.className = "history-meta";
+
+        const labelEl = document.createElement("span");
+        labelEl.className = "history-label";
+        labelEl.textContent = label;
+
+        const badge = document.createElement("span");
+        badge.className = `history-badge ${item.is_toxic ? "toxic" : "clean"}`;
+        badge.textContent = verdict;
+
+        meta.append(labelEl, badge);
+        entry.append(snippet, meta);
         entry.addEventListener("click", () => {
           textarea.value = item.text || "";
           updateCount();
@@ -229,11 +241,14 @@
 
     async function loadStats() {
       try {
-        const response = await fetch("/api/stats");
-        if (!response.ok) {
+        const [statsResponse, healthResponse] = await Promise.all([
+          fetch("/api/stats"),
+          fetch("/api/health"),
+        ]);
+        if (!statsResponse.ok) {
           return;
         }
-        const data = await response.json();
+        const data = await statsResponse.json();
         if (data.model_type && data.vectorizer) {
           statModel.textContent = `MODEL: ${data.model_type} | ${data.vectorizer}`;
         }
@@ -243,8 +258,18 @@
         if (data.dataset) {
           statDataset.textContent = `DATASET: ${data.dataset}`;
         }
+        if (healthResponse.ok) {
+          const health = await healthResponse.json();
+          const loaded = Boolean(health.model_loaded);
+          statStatus.textContent = loaded ? "MODEL: LIVE" : "MODEL: UNAVAILABLE";
+          statStatus.classList.toggle("live", loaded);
+          statStatus.classList.toggle("offline", !loaded);
+          statStatus.classList.remove("pending");
+        }
       } catch (err) {
-        return;
+        statStatus.textContent = "MODEL: OFFLINE";
+        statStatus.classList.remove("pending", "live");
+        statStatus.classList.add("offline");
       }
     }
 

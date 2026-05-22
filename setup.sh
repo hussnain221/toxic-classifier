@@ -59,4 +59,4 @@ elif command -v xdg-open >/dev/null 2>&1; then
 fi
 
 echo "App running at http://localhost:5000"
-echo "✅ SETUP COMPLETE — Open http://localhost:5000 in your browser"
+echo "SETUP COMPLETE - Open http://localhost:5000 in your browser"
